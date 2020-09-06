@@ -17,4 +17,4 @@ Stockfish at depth 38 evaluates this position to be slightly favorable for white
 
 Indeed, the ANN predicts that, even if the white and black players were equally matched in terms of ratings, this position still favors black. 
 
-The predictions made by this model can also be used as metrics for position sharpness/complexity. Positions that are evaluated to have around equal winning chances for white and black, but have extremely low drawing chances, can be interpreted as being sharp. 
+This model can also be used to create metrics for position sharpness/complexity. Positions that are evaluated to have around equal winning chances for white and black, but have extremely low drawing chances, can be interpreted as being sharp. 
