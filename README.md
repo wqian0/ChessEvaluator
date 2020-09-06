@@ -16,3 +16,5 @@ Here is an example of this from an online game I played:
 Stockfish at depth 38 evaluates this position to be slightly favorable for white (+0.64), likely because of the slight material advantage. However, black's pieces are much more active, and white's king is exposed, making the defense quite difficult even though the position is objectively holdable. I went on to lose this position quite quickly. 
 
 Indeed, the ANN predicts that, even if the white and black players were equally matched in terms of ratings, this position still favors black. 
+
+This model can also be used as a metric for position sharpness/complexity. Positions that are evaluated to have around equal winning chances for white and black, but have extremely low drawing chances, can be interpreted as being sharp. 
