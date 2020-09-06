@@ -15,4 +15,4 @@ Here is one example of this from an online game I played:
 
 Stockfish at depth 33 evaluates this position to be slightly favorable for white, likely because of the slight material advantage. However, black's pieces are much more active, and white's king is exposed, making the defense quite difficult even though the position is objectively holdable. I went on to lose this position quite quickly. 
 
-Indeed, the ANN predicts that, even if the white and black players were equally matched in terms of rating, this position still favors black. 
+Indeed, the ANN predicts that, even if the white and black players were equally matched in terms of ratings, this position still favors black. 
