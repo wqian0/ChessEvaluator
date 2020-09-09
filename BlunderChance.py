@@ -19,9 +19,9 @@ import chess
 import chess.pgn
 import chess.engine
 
-# pgns = open("lichess_db_standard_rated_2017-03.pgn")
-training_data = pd.read_csv("training_data_inc.csv")
-val_data = pd.read_csv("val_data_inc.csv")
+# pgns = open("lichess_db_standard_rated_2017-02.pgn")
+# training_data = pd.read_csv("training_data_inc.csv")
+# val_data = pd.read_csv("val_data_inc.csv")
 
 train_dir = "C:/Users/billy/PycharmProjects/ChessEvaluator/training_data/"
 val_dir = "C:/Users/billy/PycharmProjects/ChessEvaluator/val_data/"
@@ -66,11 +66,11 @@ def convert_board_part(input): # One hot encoding for first 12 channels
     return output
 
 def create_residual_block(X_in, regularizerl2):
-    X = Conv2D(filters=64, kernel_size=(3, 3), padding="same",
+    X = Conv2D(filters=80, kernel_size=(3, 3), padding="same",
                data_format="channels_first", kernel_regularizer= regularizerl2)(X_in)
     X = BatchNormalization(axis=1)(X)
     X = Activation("relu")(X)
-    X = Conv2D(filters=64, kernel_size=(3, 3), padding="same",
+    X = Conv2D(filters=80, kernel_size=(3, 3), padding="same",
                data_format="channels_first", kernel_regularizer=regularizerl2)(X)
     X = BatchNormalization(axis=1)(X)
     X = Add()([X, X_in])
@@ -80,13 +80,13 @@ def create_residual_block(X_in, regularizerl2):
 def get_full_model(regularizerl2, residuals):
     X_in = Input(shape=(6, 8, 8))
     X_extra = Input(shape=(7,))
-    X = Conv2D(64, (3, 3), activation='relu', input_shape=(6, 8, 8), padding='same',
+    X = Conv2D(80, (3, 3), activation='relu', input_shape=(6, 8, 8), padding='same',
                data_format="channels_first", kernel_regularizer=regularizerl2)(X_in)
     X = BatchNormalization(axis = 1)(X)
     X = Activation("relu")(X)
     for i in range(residuals):
         X = create_residual_block(X, regularizerl2)
-    X = Conv2D(8, (1, 1), activation='relu', input_shape=(6, 8, 8), padding='same',
+    X = Conv2D(16, (1, 1), activation='relu', input_shape=(6, 8, 8), padding='same',
            data_format="channels_first", kernel_regularizer=regularizerl2)(X)
     X = BatchNormalization(axis = 1)(X)
     X = Activation("relu")(X)
@@ -99,8 +99,8 @@ def get_full_model(regularizerl2, residuals):
 
 def fully_connected_part(regularizerl2):
     model = Sequential()
-    model.add(Dense(512, activation='relu', kernel_regularizer = regularizerl2))
-    model.add(Dense(256, activation='relu', kernel_regularizer = regularizerl2))
+    model.add(Dense(1024, activation='relu', kernel_regularizer = regularizerl2))
+    # model.add(Dense(256, activation='relu', kernel_regularizer = regularizerl2))
     model.add(Dense(3, activation='softmax', kernel_regularizer = regularizerl2))
     return model
 
@@ -209,6 +209,8 @@ class DataGenerator(tf.keras.utils.Sequence):
     def __data_generation(self, index):
         boards = np.load(self.dir+'board_'+str(index)+'.npy')
         extras = np.load(self.dir+'extra_'+str(index)+'.npy')
+        extras[:, 5] /= self.elo_norm
+        extras[:, 6] /= self.elo_norm
         outcomes = np.load(self.dir+'outcome_'+str(index)+'.npy')
         return [boards, extras], outcomes
 
@@ -227,7 +229,7 @@ def read_all_games(pgnList, positions_cap):
         if curr.headers['Result'] == '0-1':
             result = 2
         plusIndex = curr.headers['TimeControl'].find('+')
-        # filters out time-controls below 3-minute blitz, and games with less than 2 moves
+        # filters out time-controls below 3-minute blitz with 2 s inc, and games with less than 2 moves
         if len(moves) > 1 and plusIndex != -1 and int(curr.headers['TimeControl'][0:plusIndex]) >= 180 and int(curr.headers['TimeControl'][plusIndex + 1 :]) >= 2:
             whiteElo = curr.headers['WhiteElo']
             blackElo = curr.headers['BlackElo']
@@ -241,99 +243,47 @@ def read_all_games(pgnList, positions_cap):
         curr = chess.pgn.read_game(pgnList)
         gameNo += 1
     return FENs, elos, results
-# def get_dataset(file_path, batch_size):
-#   dataset = tf.data.experimental.make_csv_dataset(
-#       file_path,
-#       batch_size=batch_size,
-#       select_columns= [1,2,3,4],
-#       label_name='Result',
-#       num_epochs = 1)
-#   return dataset
-#
-# def combine_fen_rating_tf(fens, white_elo, black_elo):
-#     boards = []
-#     for i in range(len(fens)):
-#         fen = fens[i].numpy().decode('utf-8')
-#         parts = fen.split(" ")
-#         board = convert_board_part(parts[0])
-#         if parts[1] == 'w':
-#             board[12] += 1
-#         castling_rights = parts[2]
-#         if "K" in castling_rights:
-#             board[13] += 1
-#         if "Q" in castling_rights:
-#             board[14] += 1
-#         if "k" in castling_rights:
-#             board[15] += 1
-#         if "q" in castling_rights:
-#             board[16] += 1
-#         board[17] += 1
-#         board[18] += 1
-#         board[17] *= white_elo[i]
-#         board[18] *= black_elo[i]
-#         boards.append(board)
-#     return np.array(boards)
-if __name__ == "__main__":
-    board_parts = []
-    extra_parts = []
-    outcomes = []
-    for i in range(len(training_data) // 1024):
-        print(i)
-        for j in range(1024):
-            board, extra = convert_fen2(training_data['FEN'][i * 1024 + j], compressed = True)
-            board_parts.append(board)
-            extra_parts.append(np.concatenate([extra, np.array([training_data['WhiteElo'][i * 1024 + j], training_data['BlackElo'][i * 1024 + j]])]))
-            outcomes.append(training_data['Result'][i * 1024 + j])
-        board_parts = np.array(board_parts)
-        extra_parts = np.array(extra_parts)
-        outcomes = np.array(outcomes)
-        np.save(open(train_dir +'board_' + str(i) + ".npy", 'wb'), board_parts)
-        np.save(open(train_dir + 'extra_' + str(i) + ".npy", 'wb'), extra_parts)
-        np.save(open(train_dir+'outcome_'+ str(i)+".npy", 'wb'), outcomes)
-        board_parts = []
-        extra_parts = []
-        outcomes = []
 
-    board_parts = []
-    extra_parts = []
-    outcomes = []
-    for i in range(len(val_data) // 1024):
-        print(i)
-        for j in range(1024):
-            board, extra = convert_fen2(val_data['FEN'][i * 1024 + j], compressed = True)
-            board_parts.append(board)
-            extra_parts.append(np.concatenate([extra, np.array([val_data['WhiteElo'][i * 1024 + j], val_data['BlackElo'][i * 1024 + j]])]))
-            outcomes.append(training_data['Result'][i * 1024 + j])
-        board_parts = np.array(board_parts)
-        extra_parts = np.array(extra_parts)
-        outcomes = np.array(outcomes)
-        np.save(open(val_dir +'board_' + str(i) + ".npy", 'wb'), board_parts)
-        np.save(open(val_dir + 'extra_' + str(i) + ".npy", 'wb'), extra_parts)
-        np.save(open(val_dir+'outcome_'+ str(i)+".npy", 'wb'), outcomes)
-        board_parts = []
-        extra_parts = []
-        outcomes = []
-    # batchsize= 1024
-    # training_gen = DataGenerator(train_dir, 58593, batchsize)
-    # val_gen = DataGenerator(val_dir, 7324, batchsize)
-    #
-    # # training_data = get_dataset(train_filename, batchsize)
-    # # val_data = get_dataset(val_filename, batchsize)
-    # # training_data = training_data.map(lambda x, y: (tf.py_function(func = combine_fen_rating_tf, inp = [x['FEN'], x['WhiteElo'], x['BlackElo']], Tout = tf.float16), y), num_parallel_calls= 8)
-    # # val_data = val_data.map(lambda x, y: (tf.py_function(func = combine_fen_rating_tf, inp = [x['FEN'], x['WhiteElo'], x['BlackElo']], Tout = tf.float16), y), num_parallel_calls= 8)
-    # regularizerl2 = L2(l2 = 1e-5)
-    # #model = get_big_model(regularizerl2, 1)
-    # model = get_combined_model()
-    # model.summary()
-    # decayedAdam = AdamW(weight_decay = 1e-6, learning_rate = 0.001, beta_1=0.9, beta_2=0.999, epsilon=1e-07, amsgrad=False, name='AdamW')
-    # regAdam = tf.optimizers.Adam(learning_rate=0.001, beta_1=0.9, beta_2=0.999, epsilon=1e-07, amsgrad=False,
-    #     name='Adam')
-    # stoch = tf.keras.optimizers.SGD(learning_rate= .001, momentum = .8, nesterov= True)
-    # model.compile(optimizer = regAdam, loss='sparse_categorical_crossentropy', metrics=['sparse_categorical_accuracy'])
-    # history = model.fit(training_gen, validation_data = val_gen,
-    #                     validation_batch_size=batchsize, validation_steps=7500000// (batchsize * 16),  epochs = 10, batch_size= batchsize, verbose=1, steps_per_epoch= 60000000 // (batchsize * 16))
-    # model.save_weights('newest2.h5')
-    # plt.plot(history.history['sparse_categorical_accuracy'])
-    # plt.plot(history.history['val_sparse_categorical_accuracy'])
-    # plt.show()
+if __name__ == "__main__":
+
+    # board_parts = []
+    # extra_parts = []
+    # outcomes = []
+    # for i in range(len(val_data) // 1024):
+    #     print(i)
+    #     for j in range(1024):
+    #         board, extra = convert_fen2(val_data['FEN'][i * 1024 + j], compressed = True)
+    #         board_parts.append(board)
+    #         extra_parts.append(np.concatenate([extra, np.array([val_data['WhiteElo'][i * 1024 + j], val_data['BlackElo'][i * 1024 + j]])]))
+    #         outcomes.append(val_data['Result'][i * 1024 + j])
+    #     board_parts = np.array(board_parts)
+    #     extra_parts = np.array(extra_parts)
+    #     outcomes = np.array(outcomes)
+    #     np.save(open(val_dir +'board_' + str(i) + ".npy", 'wb'), board_parts)
+    #     np.save(open(val_dir + 'extra_' + str(i) + ".npy", 'wb'), extra_parts)
+    #     np.save(open(val_dir+'outcome_'+ str(i)+".npy", 'wb'), outcomes)
+    #     board_parts = []
+    #     extra_parts = []
+    #     outcomes = []
+
+    batchsize= 1024
+    training_gen = DataGenerator(train_dir, 58593, batchsize, 3000)
+    val_gen = DataGenerator(val_dir, 7324, batchsize, 3000)
+
+    regularizerl2 = L2(l2 = 1e-5)
+    model = get_full_model(regularizerl2, 6)
+    #model = get_combined_model()
+    model.summary()
+    decayedAdam = AdamW(weight_decay = 1e-6, learning_rate = 0.001, beta_1=0.9, beta_2=0.999, epsilon=1e-07, amsgrad=False, name='AdamW')
+    regAdam = tf.optimizers.Adam(learning_rate=0.0005, beta_1=0.9, beta_2=0.999, epsilon=1e-07, amsgrad=False,
+        name='Adam')
+    stoch = tf.keras.optimizers.SGD(learning_rate= .001, momentum = .8, nesterov= True)
+    model.compile(optimizer = regAdam, loss='sparse_categorical_crossentropy', metrics=['sparse_categorical_accuracy'])
+    model.load_weights('newest_with_gen.h5')
+    history = model.fit(training_gen, validation_data = val_gen,
+                        validation_batch_size=batchsize, validation_steps=7324 // 8,  epochs = 5, batch_size= batchsize, verbose=1, steps_per_epoch= 58593 // 8, use_multiprocessing= True, workers = 8)
+    model.save_weights('More epochs.h5')
+    plt.plot(history.history['sparse_categorical_accuracy'])
+    plt.plot(history.history['val_sparse_categorical_accuracy'])
+    plt.show()
 
