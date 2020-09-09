@@ -47,8 +47,6 @@ def read_all_games(tactics_file):
             board.push(moves[i * 2])
             FENs.append(board.fen())
             board.push(moves[i * 2 + 1])
-            if str(curr.headers['Site']) == 'https://lichess.org/p8yVbbEJ':
-                print(moves[i * 2 + 1])
             correct_moves.append(moves[i * 2 + 1])
         curr = chess.pgn.read_game(tactics_file)
     return FENs, correct_moves
