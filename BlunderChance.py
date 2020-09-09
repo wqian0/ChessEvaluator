@@ -65,23 +65,6 @@ def convert_board_part(input): # One hot encoding for first 12 channels
                 output[indices[modified_input[currLoc]]][i][j] = 1
     return output
 
-#3q2k1/p4ppp/8/2pn4/8/8/P2n1P1P/3R1R1K w - - 0 25
-def convert_board_part_fast(input): # One hot encoding for first 12 channels
-    output = np.zeros((19, 8, 8), dtype = np.float16)
-    modified_input = input
-    row = 0
-    col = 0
-    for i in range(len(input)):
-        if input[i].isdigit():
-            col += int(input[i])
-        elif input[i].isalpha():
-            output[indices[input[i]]][row][col] = 1
-            col += 1
-        else:
-            row += 1
-            col = 0
-    return output
-
 def create_residual_block(X_in, regularizerl2):
     X = Conv2D(filters=64, kernel_size=(3, 3), padding="same",
                data_format="channels_first", kernel_regularizer= regularizerl2)(X_in)
@@ -113,22 +96,6 @@ def get_full_model(regularizerl2, residuals):
     X = Activation("relu")(X)
     output = Dense(3, kernel_regularizer= regularizerl2, activation = 'softmax')(X)
     return tf.keras.Model(inputs = [X_in, X_extra], outputs = output)
-
-def get_big_model(regularizerl2, residuals):
-    X_in = Input(shape=(19, 8, 8))
-    X = Conv2D(64, (3, 3), activation='relu', input_shape=(19, 8, 8), padding='same',
-               data_format="channels_first", kernel_regularizer=regularizerl2)(X_in)
-    X = BatchNormalization(axis = 1)(X)
-    X = Activation("relu")(X)
-    for i in range(residuals):
-        X = create_residual_block(X, regularizerl2)
-    X = Conv2D(2, (1, 1), activation='relu', input_shape=(19, 8, 8), padding='same',
-           data_format="channels_first", kernel_regularizer=regularizerl2)(X)
-    X = BatchNormalization(axis = 1)(X)
-    X = Activation("relu")(X)
-    X = Flatten()(X)
-    output = Dense(3, kernel_regularizer= regularizerl2, activation = 'softmax')(X)
-    return tf.keras.Model(inputs = X_in, outputs = output)
 
 def fully_connected_part(regularizerl2):
     model = Sequential()
@@ -215,31 +182,13 @@ def convert_fen2(fen, compressed = False, flip = False):
         col_and_castling *= -1
     return [board, col_and_castling]
 
-def combine_fen_rating(fen, white_elo, black_elo):
-    parts = fen.split(" ")
-    board = convert_board_part(parts[0])
-    if parts[1] == 'w':
-        board[12] += 1
-    castling_rights = parts[2]
-    if "K" in castling_rights:
-        board[13] += 1
-    if "Q" in castling_rights:
-        board[14] += 1
-    if "k" in castling_rights:
-        board[15] += 1
-    if "q" in castling_rights:
-        board[16] += 1
-    board[17] += 1
-    board[18] += 1
-    board[17] *= white_elo
-    board[18] *= black_elo
-    return board
 
 class DataGenerator(tf.keras.utils.Sequence):
     'Generates data for Keras'
-    def __init__(self, dir, num_inputs, batch_size, shuffle=True):
+    def __init__(self, dir, num_inputs, batch_size, elo_norm, shuffle=True):
         'Initialization'
         self.dir = dir
+        self.elo_norm = elo_norm
         self.num_inputs = num_inputs
         self.batch_size = batch_size
         self.indices = np.arange(num_inputs)
@@ -247,7 +196,7 @@ class DataGenerator(tf.keras.utils.Sequence):
         self.on_epoch_end()
 
     def __len__(self):
-        return self.num_inputs // self.batch_size
+        return self.num_inputs
 
     def __getitem__(self, index):
         X, y = self.__data_generation(self.indices[index])
@@ -261,72 +210,7 @@ class DataGenerator(tf.keras.utils.Sequence):
         boards = np.load(self.dir+'board_'+str(index)+'.npy')
         extras = np.load(self.dir+'extra_'+str(index)+'.npy')
         outcomes = np.load(self.dir+'outcome_'+str(index)+'.npy')
-        return [boards, extra], outcomes
-
-
-def generate_from_csv(csv, batchsize, chunksize, elo_norm):
-    df_it = pd.read_csv(csv, iterator = True)
-    while True:
-        board_parts = []
-        extra_parts = []
-        try:
-            df = df_it.get_chunk(chunksize)
-        except StopIteration:
-            df_it = pd.read_csv(csv, iterator=True)
-            df = df_it.get_chunk(chunksize)
-        indices = df.index.tolist()
-        np.random.shuffle(indices)
-        results = np.asarray(df['Result'][indices[:batchsize]])
-        for i in range(batchsize):
-            board_part, extra_part = convert_fen2(df['FEN'][indices[i]], compressed= True)
-            board_parts.append(board_part)
-            elos = np.array([df['WhiteElo'][indices[i]], df['BlackElo'][indices[i]]]) / elo_norm
-            extra_part = np.concatenate([extra_part, elos])
-            extra_parts.append(extra_part)
-        yield [np.asarray(board_parts), np.asarray(extra_parts)], results
-
-def generate_from_csv_combined(csv, batchsize, chunksize, elo_norm):
-    df_it = pd.read_csv(csv, iterator = True)
-    while True:
-        inputs = np.zeros((batchsize, 19, 8, 8))
-        try:
-            df = df_it.get_chunk(chunksize)
-        except StopIteration:
-            df_it = pd.read_csv(csv, iterator=True)
-            df = df_it.get_chunk(chunksize)
-        indices = df.index.tolist()
-        np.random.shuffle(indices)
-        results = np.asarray(df['Result'][indices[:batchsize]])
-        for i in range(batchsize):
-            input = combine_fen_rating(df['FEN'][indices[i]], df['WhiteElo'][indices[i]]/ elo_norm, df['BlackElo'][indices[i]]/ elo_norm)
-            inputs[i] = input
-        yield inputs, results
-
-
-##Generates randomly selected training/validation data directly from a csv/dataframe. For greater training speedup, pre-process the FENs
-def generate_from_df(df, batchsize, elo_norm):
-    while True:
-        board_parts = []
-        extra_parts = []
-        indices = np.random.choice(len(df), batchsize)
-        results = np.asarray(df['Result'][indices])
-        for i in range(len(indices)):
-            board_part, extra_part = convert_fen2(df['FEN'][indices[i]], compressed= True)
-            board_parts.append(board_part)
-            elos = np.array([df['WhiteElo'][indices[i]], df['BlackElo'][indices[i]]]) / elo_norm
-            extra_part = np.concatenate([extra_part, elos])
-            extra_parts.append(extra_part)
-        yield [np.asarray(board_parts), np.asarray(extra_parts)], results
-
-def generate_from_df_combined(df, batchsize, elo_norm):
-    while True:
-        inputs = np.zeros((batchsize, 19, 8, 8))
-        indices = np.random.choice(len(df), batchsize)
-        results = np.asarray(df['Result'][indices])
-        for i in range(len(indices)):
-            input = combine_fen_rating(df['FEN'][indices[i]], df['WhiteElo'][indices[i]]/ elo_norm, df['BlackElo'][indices[i]]/ elo_norm)
-            inputs[i] = input
-        yield inputs, results
+        return [boards, extras], outcomes
 
 def read_all_games(pgnList, positions_cap):
     FENs = []
@@ -334,10 +218,6 @@ def read_all_games(pgnList, positions_cap):
     results = [] # 0, white wins, 1 draw, 2 black wins
     curr = chess.pgn.read_game(pgnList)
     gameNo = 0
-    # while gameNo < 1065000:
-    #     print(gameNo)
-    #     curr = chess.pgn.read_game(pgnList)
-    #     gameNo += 1
     while curr is not None and len(elos) < positions_cap:
         board = curr.board()
         moves = list(curr.mainline_moves())
@@ -402,7 +282,7 @@ if __name__ == "__main__":
         for j in range(1024):
             board, extra = convert_fen2(training_data['FEN'][i * 1024 + j], compressed = True)
             board_parts.append(board)
-            extra_parts.append(extra)
+            extra_parts.append(np.concatenate([extra, np.array([training_data['WhiteElo'][i * 1024 + j], training_data['BlackElo'][i * 1024 + j]])]))
             outcomes.append(training_data['Result'][i * 1024 + j])
         board_parts = np.array(board_parts)
         extra_parts = np.array(extra_parts)
@@ -422,8 +302,8 @@ if __name__ == "__main__":
         for j in range(1024):
             board, extra = convert_fen2(val_data['FEN'][i * 1024 + j], compressed = True)
             board_parts.append(board)
-            extra_parts.append(extra)
-            outcomes.append(val_data['Result'][i * 1024 + j])
+            extra_parts.append(np.concatenate([extra, np.array([val_data['WhiteElo'][i * 1024 + j], val_data['BlackElo'][i * 1024 + j]])]))
+            outcomes.append(training_data['Result'][i * 1024 + j])
         board_parts = np.array(board_parts)
         extra_parts = np.array(extra_parts)
         outcomes = np.array(outcomes)
@@ -433,8 +313,10 @@ if __name__ == "__main__":
         board_parts = []
         extra_parts = []
         outcomes = []
-
-    # # batchsize= 1024
+    # batchsize= 1024
+    # training_gen = DataGenerator(train_dir, 58593, batchsize)
+    # val_gen = DataGenerator(val_dir, 7324, batchsize)
+    #
     # # training_data = get_dataset(train_filename, batchsize)
     # # val_data = get_dataset(val_filename, batchsize)
     # # training_data = training_data.map(lambda x, y: (tf.py_function(func = combine_fen_rating_tf, inp = [x['FEN'], x['WhiteElo'], x['BlackElo']], Tout = tf.float16), y), num_parallel_calls= 8)
@@ -448,7 +330,7 @@ if __name__ == "__main__":
     #     name='Adam')
     # stoch = tf.keras.optimizers.SGD(learning_rate= .001, momentum = .8, nesterov= True)
     # model.compile(optimizer = regAdam, loss='sparse_categorical_crossentropy', metrics=['sparse_categorical_accuracy'])
-    # history = model.fit(generate_from_df(training_data, batchsize, 3000), validation_data = generate_from_df(val_data, batchsize , 3000),
+    # history = model.fit(training_gen, validation_data = val_gen,
     #                     validation_batch_size=batchsize, validation_steps=7500000// (batchsize * 16),  epochs = 10, batch_size= batchsize, verbose=1, steps_per_epoch= 60000000 // (batchsize * 16))
     # model.save_weights('newest2.h5')
     # plt.plot(history.history['sparse_categorical_accuracy'])
