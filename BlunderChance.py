@@ -1,7 +1,3 @@
-import codecs
-import gc
-import threading
-
 import pandas as pd
 import numpy as np
 import scipy as sp
@@ -19,7 +15,22 @@ import chess
 import chess.pgn
 import chess.engine
 
-# pgns = open("lichess_db_standard_rated_2017-02.pgn")
+# import os
+# os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+# my_devices = tf.config.experimental.list_physical_devices(device_type='CPU')
+# tf.config.experimental.set_visible_devices(devices= my_devices, device_type='CPU')
+#
+# try:
+#     # Disable all GPUS
+#     tf.config.set_visible_devices([], 'GPU')
+#     visible_devices = tf.config.get_visible_devices()
+#     for device in visible_devices:
+#         assert device.device_type != 'GPU'
+# except:
+#     # Invalid device or cannot modify virtual devices once initialized.
+#     pass
+
+pgns = open("lichess_db_standard_rated_2017-02.pgn")
 # training_data = pd.read_csv("training_data_inc.csv")
 # val_data = pd.read_csv("val_data_inc.csv")
 
@@ -31,6 +42,7 @@ val_dir = "C:/Users/billy/PycharmProjects/ChessEvaluator/val_data/"
 
 fen_all_pieces = 'KQRBNPkqrbnp'
 indices = {}
+board_hashes = {}
 for i in range(len(fen_all_pieces)):
     indices[fen_all_pieces[i]] = i
 
@@ -51,6 +63,37 @@ def convert_board_part_compressed(input): # -1, 0, 1 encoding
                 else:
                     output[index][i][j] = -1
     return output
+
+def convert_board_and_elo(board, WhiteElo, BlackElo, elo_norm):
+    board_out = np.zeros((6, 8, 8))
+    extra_out = np.zeros(7)
+    if board.turn is chess.WHITE:
+        extra_out[0] = 1
+    else:
+        extra_out[0] = -1
+    if board.has_kingside_castling_rights(chess.WHITE):
+        extra_out[1] = 1
+    if board.has_queenside_castling_rights(chess.WHITE):
+        extra_out[2] = 1
+    if board.has_kingside_castling_rights(chess.BLACK):
+        extra_out[3] = -1
+    if board.has_queenside_castling_rights(chess.BLACK):
+        extra_out[4] = -1
+    extra_out[5] = WhiteElo / elo_norm
+    extra_out[6] = BlackElo / elo_norm
+    for row in range(8):
+        for col in range(8):
+            squareIndex = row * 8 + col
+            square=chess.SQUARES[squareIndex]
+            piece = board.piece_at(square)
+            if piece is not None:
+                piece = piece.symbol()
+                index = indices[piece] % 6
+                if piece.isupper():
+                    board_out[index][row][col] = 1
+                else:
+                    board_out[index][row][col] = -1
+    return board_out, extra_out
 
 def convert_board_part(input): # One hot encoding for first 12 channels
     output = np.zeros((19, 8, 8), dtype = np.float16)
@@ -89,6 +132,30 @@ def get_full_model(regularizerl2, residuals):
     X = Conv2D(16, (1, 1), activation='relu', input_shape=(6, 8, 8), padding='same',
            data_format="channels_first", kernel_regularizer=regularizerl2)(X)
     X = BatchNormalization(axis = 1)(X)
+    X = Activation("relu")(X)
+    X = Flatten()(X)
+    X = Concatenate()([X, X_extra])
+    X = Dense(512, kernel_regularizer= regularizerl2)(X)
+    X = Activation("relu")(X)
+    X = Dropout(0.25)(X)
+    X = Dense(512, kernel_regularizer=regularizerl2)(X)
+    X = Dropout(0.25)(X)
+    X = Activation("relu")(X)
+    output = Dense(3, kernel_regularizer= regularizerl2, activation = 'softmax')(X)
+    return tf.keras.Model(inputs = [X_in, X_extra], outputs = output)
+
+def get_full_model_NHWC(regularizerl2, residuals):
+    X_in = Input(shape=(8, 8, 6))
+    X_extra = Input(shape=(7,))
+    X = Conv2D(80, (3, 3), activation='relu', input_shape=(8, 8, 6), padding='same',
+               data_format="channels_last", kernel_regularizer=regularizerl2)(X_in)
+    X = BatchNormalization()(X)
+    X = Activation("relu")(X)
+    for i in range(residuals):
+        X = create_residual_block(X, regularizerl2)
+    X = Conv2D(16, (1, 1), activation='relu', input_shape=(8, 8, 6), padding='same',
+           data_format="channels_last", kernel_regularizer=regularizerl2)(X)
+    X = BatchNormalization()(X)
     X = Activation("relu")(X)
     X = Flatten()(X)
     X = Concatenate()([X, X_extra])
@@ -154,10 +221,57 @@ def convert_fen(fen, include_enpassant = False):
         castling[3] = 1
     else:
         return np.concatenate((col, flattened_board, castling))
+
 def convert_fen2(fen, compressed = False, flip = False):
     parts = fen.split(" ")
     if compressed:
         board = convert_board_part_compressed(parts[0])
+    else:
+        board = convert_board_part(parts[0])
+    if flip:
+        board = -np.flip(board, axis = 1)
+    col_and_castling = np.zeros(5)
+    if parts[1] == 'w':
+        col_and_castling[0] = 1
+    elif compressed:
+        col_and_castling[0] = -1
+    else:
+        col_and_castling[0] = 0
+    castling_rights = parts[2]
+    if "K" in castling_rights:
+        col_and_castling[1] = 1
+    if "Q" in castling_rights:
+        col_and_castling[2] = 1
+    if "k" in castling_rights:
+        col_and_castling[3] = -1 * compressed
+    if "q" in castling_rights:
+        col_and_castling[4] = -1 * compressed
+    if flip:
+        col_and_castling *= -1
+    return [board, col_and_castling]
+
+def convert_board_part_NHWC(input): # -1, 0, 1 encoding
+    output = np.zeros((8, 8, 6), dtype=np.float16)
+    modified_input = input
+    for i in range(9):
+        modified_input = modified_input.replace(str(i), '*' * i)
+    modified_input = modified_input.replace("/", "")
+    for i in range(8):
+        for j in range(8):
+            currLoc = 8*i + j
+            letter = modified_input[currLoc]
+            if letter.isalpha():
+                index = indices[modified_input[currLoc]] % 6
+                if letter.isupper():
+                    output[i][j][index] = 1
+                else:
+                    output[i][j][index] = -1
+    return output
+
+def convert_fen3(fen, compressed = False, flip = False):
+    parts = fen.split(" ")
+    if compressed:
+        board = convert_board_part_NHWC(parts[0])
     else:
         board = convert_board_part(parts[0])
     if flip:
@@ -208,7 +322,7 @@ class DataGenerator(tf.keras.utils.Sequence):
 
     def __data_generation(self, index):
         boards = np.load(self.dir+'board_'+str(index)+'.npy')
-        extras = np.load(self.dir+'extra_'+str(index)+'.npy')
+        extras = np.array(np.load(self.dir+'extra_'+str(index)+'.npy'), dtype = np.float16)
         extras[:, 5] /= self.elo_norm
         extras[:, 6] /= self.elo_norm
         outcomes = np.load(self.dir+'outcome_'+str(index)+'.npy')
@@ -244,46 +358,136 @@ def read_all_games(pgnList, positions_cap):
         gameNo += 1
     return FENs, elos, results
 
+
+def get_best_move(model, board, WhiteElo, BlackElo, elo_norm, depth, isWhite):
+    bestScore = -100 if isWhite else 100
+    bestMove = None
+
+    for move in board.legal_moves:
+        board.push(move)
+        currScore = lookahead(model, board, WhiteElo, BlackElo, elo_norm, depth - 1, -100, 100, not isWhite)
+        if isWhite and currScore > bestScore:
+            bestScore = currScore
+            bestMove = move
+        elif not isWhite and currScore < bestScore:
+            bestScore = currScore
+            bestMove = move
+        board.pop()
+        print(bestScore, bestMove, currScore, move, len(board_hashes))
+    return bestMove
+
+def hash(board, isWhite, depth):
+    return str(board) +str(isWhite) +str(depth)
+
+def lookahead(model, board, WhiteElo, BlackElo, elo_norm, depth, alpha, beta, isWhite):
+    currHash = hash(board, isWhite, depth)
+    if currHash in board_hashes:
+        return board_hashes[currHash]
+    if depth == 0 or not board.legal_moves:
+        board_part, extra = convert_board_and_elo(board, WhiteElo, BlackElo, elo_norm)
+        prediction = np.array(model([np.array([board_part]), np.array([extra])])[0])
+        board_hashes[currHash] = prediction[0]
+        return prediction[0]
+    bestScore  = -99 if isWhite else 99
+
+    for move in board.legal_moves:
+        board.push(move)
+        currScore = lookahead(model, board, WhiteElo, BlackElo, elo_norm, depth - 1, alpha, beta, not isWhite)
+        board_hashes[hash(board, isWhite, depth)] = currScore
+        if isWhite:
+            bestScore = max(bestScore, currScore)
+            alpha = max(bestScore, alpha)
+        else:
+            bestScore = min(bestScore, currScore)
+            beta = min(bestScore, beta)
+        board.pop()
+        if beta < alpha:
+            return bestScore
+    return bestScore
+
 if __name__ == "__main__":
 
+    # fens, elos, results = read_all_games(pgns, 30000000)
+    # fens = np.array(fens)
+    # elos = np.array(elos)
+    # results = np.array(results)
+    # rand_indices = np.arange(len(fens))
+    # np.random.shuffle(rand_indices)
+    # fens = fens[rand_indices]
+    # elos = elos[rand_indices]
+    # results = results[rand_indices]
+    #
+    # training_num = len(fens) * 9 // 10
+    # val_num = len(fens) - training_num
+    #
+    # fens_train = fens[:training_num]
+    # fens_val = fens[training_num:]
+    # elos_train = elos[:training_num]
+    # elos_val = elos[training_num:]
+    # results_train = results[:training_num]
+    # results_val = results[training_num:]
+    #
     # board_parts = []
     # extra_parts = []
     # outcomes = []
-    # for i in range(len(val_data) // 1024):
+    # for i in range(training_num // 1024):
     #     print(i)
     #     for j in range(1024):
-    #         board, extra = convert_fen2(val_data['FEN'][i * 1024 + j], compressed = True)
+    #         board, extra = convert_fen2(fens_train[i * 1024 + j], compressed = True)
+    #         extra = np.concatenate([extra, np.array(elos_train[i * 1024 + j])])
     #         board_parts.append(board)
-    #         extra_parts.append(np.concatenate([extra, np.array([val_data['WhiteElo'][i * 1024 + j], val_data['BlackElo'][i * 1024 + j]])]))
-    #         outcomes.append(val_data['Result'][i * 1024 + j])
-    #     board_parts = np.array(board_parts)
-    #     extra_parts = np.array(extra_parts)
-    #     outcomes = np.array(outcomes)
-    #     np.save(open(val_dir +'board_' + str(i) + ".npy", 'wb'), board_parts)
-    #     np.save(open(val_dir + 'extra_' + str(i) + ".npy", 'wb'), extra_parts)
-    #     np.save(open(val_dir+'outcome_'+ str(i)+".npy", 'wb'), outcomes)
+    #         extra_parts.append(extra)
+    #         outcomes.append(results_train[i * 1024 + j])
+    #     np.save(open(train_dir + 'board_'+str(58593 + i)+".npy", "wb"), np.array(board_parts))
+    #     np.save(open(train_dir + 'extra_' + str(58593 + i) + ".npy", "wb"), np.array(extra_parts))
+    #     np.save(open(train_dir + 'outcome_' + str(58593 + i) + ".npy", "wb"), np.array(outcomes))
+    #     board_parts = []
+    #     extra_parts = []
+    #     outcomes = []
+    #
+    # for i in range(val_num // 1024):
+    #     print(i)
+    #     for j in range(1024):
+    #         board, extra = convert_fen2(fens_val[i * 1024 + j], compressed= True)
+    #         extra = np.concatenate([extra, np.array(elos_val[i * 1024 + j])])
+    #         board_parts.append(board)
+    #         extra_parts.append(extra)
+    #         outcomes.append(results_val[i * 1024 + j])
+    #     np.save(open(val_dir + 'board_'+str(7324 + i)+".npy", "wb"), np.array(board_parts))
+    #     np.save(open(val_dir + 'extra_' + str(7324 + i) + ".npy", "wb"), np.array(extra_parts))
+    #     np.save(open(val_dir + 'outcome_' + str(7324 + i) + ".npy", "wb"), np.array(outcomes))
     #     board_parts = []
     #     extra_parts = []
     #     outcomes = []
 
-    batchsize= 1024
-    training_gen = DataGenerator(train_dir, 58593, batchsize, 3000)
-    val_gen = DataGenerator(val_dir, 7324, batchsize, 3000)
+
+    # batchsize= 1024
+    # training_gen = DataGenerator(train_dir, 84960, batchsize, 3000)
+    # val_gen = DataGenerator(val_dir, 10253, batchsize, 3000)
 
     regularizerl2 = L2(l2 = 1e-5)
     model = get_full_model(regularizerl2, 6)
     #model = get_combined_model()
     model.summary()
     decayedAdam = AdamW(weight_decay = 1e-6, learning_rate = 0.001, beta_1=0.9, beta_2=0.999, epsilon=1e-07, amsgrad=False, name='AdamW')
-    regAdam = tf.optimizers.Adam(learning_rate=0.0005, beta_1=0.9, beta_2=0.999, epsilon=1e-07, amsgrad=False,
+    regAdam = tf.optimizers.Adam(learning_rate=0.0003, beta_1=0.9, beta_2=0.999, epsilon=1e-07, amsgrad=False,
         name='Adam')
     stoch = tf.keras.optimizers.SGD(learning_rate= .001, momentum = .8, nesterov= True)
-    model.compile(optimizer = regAdam, loss='sparse_categorical_crossentropy', metrics=['sparse_categorical_accuracy'])
-    model.load_weights('newest_with_gen.h5')
-    history = model.fit(training_gen, validation_data = val_gen,
-                        validation_batch_size=batchsize, validation_steps=7324 // 8,  epochs = 5, batch_size= batchsize, verbose=1, steps_per_epoch= 58593 // 8, use_multiprocessing= True, workers = 8)
-    model.save_weights('More epochs.h5')
-    plt.plot(history.history['sparse_categorical_accuracy'])
-    plt.plot(history.history['val_sparse_categorical_accuracy'])
-    plt.show()
+    # model.compile(optimizer = regAdam, loss='sparse_categorical_crossentropy', metrics=['sparse_categorical_accuracy'])
+    model.load_weights('fat model_with_big_epoch.h5')
+    # history = model.fit(training_gen, validation_data = val_gen,
+    #                     validation_batch_size=batchsize, validation_steps= 10253 // 2,  epochs = 1, batch_size= batchsize, verbose=1, steps_per_epoch= 84960, use_multiprocessing= True, workers = 8)
+    # model.save_weights('fat model_with_big_epoch_2.h5')
+    # plt.plot(history.history['sparse_categorical_accuracy'])
+    # plt.plot(history.history['val_sparse_categorical_accuracy'])
+    # plt.show()
+
+    board = chess.Board('4r2k/pp5Q/2ppb3/8/2P1BP2/1P4P1/P5K1/8 b - - 2 4')
+    board_part, extra = convert_board_and_elo(board, 2100, 2100, 3000)
+    print(model.predict([np.array([board_part]), np.array([extra])]))
+    #
+    # get_best_move(model, board, 2100, 2100, 3000, 1, True)
+
+
+
 
