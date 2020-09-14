@@ -12,6 +12,7 @@ from sklearn.utils import shuffle
 import matplotlib.pylab as plt
 import pickle as pk
 import chess
+import chess.polyglot
 import chess.pgn
 import chess.engine
 
@@ -30,7 +31,7 @@ import chess.engine
 #     # Invalid device or cannot modify virtual devices once initialized.
 #     pass
 
-pgns = open("lichess_db_standard_rated_2017-02.pgn")
+pgns = open("combined_lichess_elite.pgn")
 # training_data = pd.read_csv("training_data_inc.csv")
 # val_data = pd.read_csv("val_data_inc.csv")
 
@@ -108,39 +109,40 @@ def convert_board_part(input): # One hot encoding for first 12 channels
                 output[indices[modified_input[currLoc]]][i][j] = 1
     return output
 
-def create_residual_block(X_in, regularizerl2):
-    X = Conv2D(filters=80, kernel_size=(3, 3), padding="same",
+def create_residual_block(X_in, filters, regularizerl2):
+    X = Conv2D(filters=filters, kernel_size=(3, 3), padding="same",
                data_format="channels_first", kernel_regularizer= regularizerl2)(X_in)
     X = BatchNormalization(axis=1)(X)
     X = Activation("relu")(X)
-    X = Conv2D(filters=80, kernel_size=(3, 3), padding="same",
+    X = Conv2D(filters=filters, kernel_size=(3, 3), padding="same",
                data_format="channels_first", kernel_regularizer=regularizerl2)(X)
     X = BatchNormalization(axis=1)(X)
     X = Add()([X, X_in])
     X = Activation("relu")(X)
     return X
 
-def get_full_model(regularizerl2, residuals):
+def get_full_model(regularizerl2, filters, residuals):
     X_in = Input(shape=(6, 8, 8))
     X_extra = Input(shape=(7,))
-    X = Conv2D(80, (3, 3), activation='relu', input_shape=(6, 8, 8), padding='same',
+    X = Conv2D(filters, (3, 3), activation='relu', input_shape=(6, 8, 8), padding='same',
                data_format="channels_first", kernel_regularizer=regularizerl2)(X_in)
     X = BatchNormalization(axis = 1)(X)
     X = Activation("relu")(X)
     for i in range(residuals):
-        X = create_residual_block(X, regularizerl2)
+        X = create_residual_block(X, filters, regularizerl2)
     X = Conv2D(16, (1, 1), activation='relu', input_shape=(6, 8, 8), padding='same',
            data_format="channels_first", kernel_regularizer=regularizerl2)(X)
     X = BatchNormalization(axis = 1)(X)
     X = Activation("relu")(X)
     X = Flatten()(X)
     X = Concatenate()([X, X_extra])
+
     X = Dense(512, kernel_regularizer= regularizerl2)(X)
     X = Activation("relu")(X)
-    X = Dropout(0.25)(X)
-    X = Dense(512, kernel_regularizer=regularizerl2)(X)
-    X = Dropout(0.25)(X)
+
+    X = Dense(256, kernel_regularizer=regularizerl2)(X)
     X = Activation("relu")(X)
+
     output = Dense(3, kernel_regularizer= regularizerl2, activation = 'softmax')(X)
     return tf.keras.Model(inputs = [X_in, X_extra], outputs = output)
 
@@ -362,10 +364,10 @@ def read_all_games(pgnList, positions_cap):
 def get_best_move(model, board, WhiteElo, BlackElo, elo_norm, depth, isWhite):
     bestScore = -100 if isWhite else 100
     bestMove = None
-
     for move in board.legal_moves:
         board.push(move)
         currScore = lookahead(model, board, WhiteElo, BlackElo, elo_norm, depth - 1, -100, 100, not isWhite)
+        board_hashes[hash(board, not isWhite, depth)] = currScore
         if isWhite and currScore > bestScore:
             bestScore = currScore
             bestMove = move
@@ -379,15 +381,19 @@ def get_best_move(model, board, WhiteElo, BlackElo, elo_norm, depth, isWhite):
 def hash(board, isWhite, depth):
     return str(board) +str(isWhite) +str(depth)
 
+def eval(model, board, WhiteElo, BlackElo, elo_norm):
+    board_part, extra = convert_board_and_elo(board, WhiteElo, BlackElo, elo_norm)
+    prediction = np.array(model([np.array([board_part]), np.array([extra])])[0])
+    return prediction[0]
+
 def lookahead(model, board, WhiteElo, BlackElo, elo_norm, depth, alpha, beta, isWhite):
     currHash = hash(board, isWhite, depth)
     if currHash in board_hashes:
         return board_hashes[currHash]
     if depth == 0 or not board.legal_moves:
-        board_part, extra = convert_board_and_elo(board, WhiteElo, BlackElo, elo_norm)
-        prediction = np.array(model([np.array([board_part]), np.array([extra])])[0])
-        board_hashes[currHash] = prediction[0]
-        return prediction[0]
+        score = eval(model, board, WhiteElo, BlackElo, elo_norm)
+        board_hashes[currHash] = score
+        return score
     bestScore  = -99 if isWhite else 99
 
     for move in board.legal_moves:
@@ -401,7 +407,7 @@ def lookahead(model, board, WhiteElo, BlackElo, elo_norm, depth, alpha, beta, is
             bestScore = min(bestScore, currScore)
             beta = min(bestScore, beta)
         board.pop()
-        if beta < alpha:
+        if beta <= alpha:
             return bestScore
     return bestScore
 
@@ -438,9 +444,9 @@ if __name__ == "__main__":
     #         board_parts.append(board)
     #         extra_parts.append(extra)
     #         outcomes.append(results_train[i * 1024 + j])
-    #     np.save(open(train_dir + 'board_'+str(58593 + i)+".npy", "wb"), np.array(board_parts))
-    #     np.save(open(train_dir + 'extra_' + str(58593 + i) + ".npy", "wb"), np.array(extra_parts))
-    #     np.save(open(train_dir + 'outcome_' + str(58593 + i) + ".npy", "wb"), np.array(outcomes))
+    #     np.save(open(train_dir + 'board_'+str(89015 + i)+".npy", "wb"), np.array(board_parts))
+    #     np.save(open(train_dir + 'extra_' + str(89015 + i) + ".npy", "wb"), np.array(extra_parts))
+    #     np.save(open(train_dir + 'outcome_' + str(89015 + i) + ".npy", "wb"), np.array(outcomes))
     #     board_parts = []
     #     extra_parts = []
     #     outcomes = []
@@ -453,40 +459,40 @@ if __name__ == "__main__":
     #         board_parts.append(board)
     #         extra_parts.append(extra)
     #         outcomes.append(results_val[i * 1024 + j])
-    #     np.save(open(val_dir + 'board_'+str(7324 + i)+".npy", "wb"), np.array(board_parts))
-    #     np.save(open(val_dir + 'extra_' + str(7324 + i) + ".npy", "wb"), np.array(extra_parts))
-    #     np.save(open(val_dir + 'outcome_' + str(7324 + i) + ".npy", "wb"), np.array(outcomes))
+    #     np.save(open(val_dir + 'board_'+str(10703 + i)+".npy", "wb"), np.array(board_parts))
+    #     np.save(open(val_dir + 'extra_' + str(10703 + i) + ".npy", "wb"), np.array(extra_parts))
+    #     np.save(open(val_dir + 'outcome_' + str(10703 + i) + ".npy", "wb"), np.array(outcomes))
     #     board_parts = []
     #     extra_parts = []
     #     outcomes = []
 
+    batchsize= 1024
+    training_gen = DataGenerator(train_dir, 106261, batchsize, 3000)
+    val_gen = DataGenerator(val_dir, 12619, batchsize, 3000)
 
-    # batchsize= 1024
-    # training_gen = DataGenerator(train_dir, 84960, batchsize, 3000)
-    # val_gen = DataGenerator(val_dir, 10253, batchsize, 3000)
-
-    regularizerl2 = L2(l2 = 1e-5)
-    model = get_full_model(regularizerl2, 6)
+    regularizerl2 = L2(l2 = 0)
+    model = get_full_model(regularizerl2, 96, 8)
     #model = get_combined_model()
     model.summary()
     decayedAdam = AdamW(weight_decay = 1e-6, learning_rate = 0.001, beta_1=0.9, beta_2=0.999, epsilon=1e-07, amsgrad=False, name='AdamW')
-    regAdam = tf.optimizers.Adam(learning_rate=0.0003, beta_1=0.9, beta_2=0.999, epsilon=1e-07, amsgrad=False,
+    regAdam = tf.optimizers.Adam(learning_rate=0.0001, beta_1=0.9, beta_2=0.999, epsilon=1e-7, amsgrad=False,
         name='Adam')
-    stoch = tf.keras.optimizers.SGD(learning_rate= .001, momentum = .8, nesterov= True)
-    # model.compile(optimizer = regAdam, loss='sparse_categorical_crossentropy', metrics=['sparse_categorical_accuracy'])
-    model.load_weights('fat model_with_big_epoch.h5')
-    # history = model.fit(training_gen, validation_data = val_gen,
-    #                     validation_batch_size=batchsize, validation_steps= 10253 // 2,  epochs = 1, batch_size= batchsize, verbose=1, steps_per_epoch= 84960, use_multiprocessing= True, workers = 8)
-    # model.save_weights('fat model_with_big_epoch_2.h5')
+    stoch = tf.keras.optimizers.SGD(learning_rate= .00004, momentum = .9, nesterov= True)
+    model.compile(optimizer = regAdam, loss='sparse_categorical_crossentropy', metrics=['sparse_categorical_accuracy'])
+    # model.load_weights('fat model_with_big_epoch_2.h5')
+    history = model.fit(training_gen, validation_data = val_gen,
+                        validation_batch_size=batchsize, validation_steps= 12619 // 25,  epochs = 25, batch_size= batchsize, verbose=1, steps_per_epoch= 106261 // 25, use_multiprocessing= True, workers = 8)
+    model.save_weights('new_model.h5')
     # plt.plot(history.history['sparse_categorical_accuracy'])
     # plt.plot(history.history['val_sparse_categorical_accuracy'])
     # plt.show()
 
-    board = chess.Board('4r2k/pp5Q/2ppb3/8/2P1BP2/1P4P1/P5K1/8 b - - 2 4')
-    board_part, extra = convert_board_and_elo(board, 2100, 2100, 3000)
-    print(model.predict([np.array([board_part]), np.array([extra])]))
-    #
-    # get_best_move(model, board, 2100, 2100, 3000, 1, True)
+    # board = chess.Board()
+    # board.set_fen('3r3k/pp1b3Q/2pp4/8/2P1BP2/1P4P1/P5K1/8 b - - 2 4')
+    # board_part, extra = convert_board_and_elo(board, 2100, 2100, 3000)
+    # print(model.predict([np.array([board_part]), np.array([extra])]))
+
+    # print(get_best_move(model, board, 2100, 2100, 3000, 3, True))
 
 
 
