@@ -110,16 +110,37 @@ def convert_board_part(input): # One hot encoding for first 12 channels
     return output
 
 def create_residual_block(X_in, filters, regularizerl2):
+    # X = Conv2D(filters=filters, kernel_size=(3, 3), padding="same",
+    #            data_format="channels_first", kernel_regularizer= regularizerl2)(X_in)
     X = Conv2D(filters=filters, kernel_size=(3, 3), padding="same",
-               data_format="channels_first", kernel_regularizer= regularizerl2)(X_in)
+               data_format="channels_first")(X_in)
     X = BatchNormalization(axis=1)(X)
     X = Activation("relu")(X)
+    # X = Conv2D(filters=filters, kernel_size=(3, 3), padding="same",
+    #            data_format="channels_first", kernel_regularizer=regularizerl2)(X)
     X = Conv2D(filters=filters, kernel_size=(3, 3), padding="same",
-               data_format="channels_first", kernel_regularizer=regularizerl2)(X)
+               data_format="channels_first")(X)
     X = BatchNormalization(axis=1)(X)
     X = Add()([X, X_in])
     X = Activation("relu")(X)
     return X
+
+def get_full_model_allconv(regularizerl2, filters, residuals):
+    X_in = Input(shape=(13, 8, 8))
+    X = Conv2D(filters, (3, 3), activation='relu', input_shape=(13, 8, 8), padding='same',
+               data_format="channels_first")(X_in)
+    X = BatchNormalization(axis = 1)(X)
+    X = Activation("relu")(X)
+    for i in range(residuals):
+        X = create_residual_block(X, filters, regularizerl2)
+    X = Conv2D(6, (1, 1), activation='relu', input_shape=(13, 8, 8), padding='same',
+           data_format="channels_first")(X)
+    X = BatchNormalization(axis = 1)(X)
+    X = Flatten()(X)
+    X = Activation("relu")(X)
+    output = Dense(3, activation = 'softmax')(X)
+    return tf.keras.Model(inputs = X_in, outputs = output)
+
 
 def get_full_model(regularizerl2, filters, residuals):
     X_in = Input(shape=(6, 8, 8))
@@ -322,13 +343,24 @@ class DataGenerator(tf.keras.utils.Sequence):
         if self.shuffle:
             np.random.shuffle(self.indices)
 
+    # def __data_generation(self, index):
+    #     boards = np.load(self.dir+'board_'+str(index)+'.npy')
+    #     extras = np.array(np.load(self.dir+'extra_'+str(index)+'.npy'), dtype = np.float16)
+    #     extras[:, 5] /= self.elo_norm
+    #     extras[:, 6] /= self.elo_norm
+    #     outcomes = np.load(self.dir+'outcome_'+str(index)+'.npy')
+    #     return [boards, extras], outcomes
+
     def __data_generation(self, index):
         boards = np.load(self.dir+'board_'+str(index)+'.npy')
         extras = np.array(np.load(self.dir+'extra_'+str(index)+'.npy'), dtype = np.float16)
         extras[:, 5] /= self.elo_norm
-        extras[:, 6] /= self.elo_norm
+        extras[:, 6] /= -self.elo_norm
+        ones = np.ones((8,8))
+        new_layers = np.array([np.einsum('i, jk -> ijk', extras[i], ones) for i in range(len(boards))])
+        boards = np.concatenate([boards, new_layers], axis = 1)
         outcomes = np.load(self.dir+'outcome_'+str(index)+'.npy')
-        return [boards, extras], outcomes
+        return boards, outcomes
 
 def read_all_games(pgnList, positions_cap):
     FENs = []
@@ -471,18 +503,20 @@ if __name__ == "__main__":
     val_gen = DataGenerator(val_dir, 12619, batchsize, 3000)
 
     regularizerl2 = L2(l2 = 0)
-    model = get_full_model(regularizerl2, 96, 8)
+    model = get_full_model_allconv(regularizerl2, 96, 8)
     #model = get_combined_model()
     model.summary()
-    decayedAdam = AdamW(weight_decay = 1e-6, learning_rate = 0.001, beta_1=0.9, beta_2=0.999, epsilon=1e-07, amsgrad=False, name='AdamW')
-    regAdam = tf.optimizers.Adam(learning_rate=0.0001, beta_1=0.9, beta_2=0.999, epsilon=1e-7, amsgrad=False,
+    regAdam = tf.optimizers.Adam(learning_rate=.00005, beta_1=0.9, beta_2=0.999, epsilon=1e-7, amsgrad=False,
         name='Adam')
     stoch = tf.keras.optimizers.SGD(learning_rate= .00004, momentum = .9, nesterov= True)
     model.compile(optimizer = regAdam, loss='sparse_categorical_crossentropy', metrics=['sparse_categorical_accuracy'])
     # model.load_weights('fat model_with_big_epoch_2.h5')
     history = model.fit(training_gen, validation_data = val_gen,
-                        validation_batch_size=batchsize, validation_steps= 12619 // 25,  epochs = 25, batch_size= batchsize, verbose=1, steps_per_epoch= 106261 // 25, use_multiprocessing= True, workers = 8)
-    model.save_weights('new_model.h5')
+                        validation_batch_size=batchsize, validation_steps= 12619,  epochs = 1, batch_size= batchsize, verbose=1, steps_per_epoch= 106261, use_multiprocessing= True, workers = 8)
+    model.save_weights('new_model_weights.h5')
+    model.save('new_model_full.h5')
+
+
     # plt.plot(history.history['sparse_categorical_accuracy'])
     # plt.plot(history.history['val_sparse_categorical_accuracy'])
     # plt.show()
