@@ -21,8 +21,12 @@ Indeed, the neural network predicts that, even if the white and black players we
 This model can also be used to create metrics for more subjective chess position features such as position sharpness/complexity. Positions that are evaluated to have around equal winning chances for white and black, but have abnormally low drawing chances, can be interpreted as being sharp. 
 
 **Other features:**
-
 * Lookahead evaluation using minimax
 * alpha-beta pruning
-* Transposition table
 * Iterative deepening
+* Transposition table
+
+An engine built from the NN's evaluation function plays at around 1400-1600 strength at a depth of 2 ply. Its play style varies depending on the rating of its opponent, as well as its own indicated rating. Higher depth improves its general playing strength significantly, but dramatically increases calculation time. Currently, its biggest weakness is with understanding deep tactical lines due to lack of search depth. 
+**To do:**
+* Move ordering 
+* Null move and quiescence search
