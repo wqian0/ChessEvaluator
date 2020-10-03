@@ -19,3 +19,9 @@ Stockfish at depth 38 evaluates this position to be slightly favorable for white
 Indeed, the neural network predicts that, even if the white and black players were equally matched in terms of ratings, this position still favors black. 
 
 This model can also be used to create metrics for more subjective chess position features such as position sharpness/complexity. Positions that are evaluated to have around equal winning chances for white and black, but have abnormally low drawing chances, can be interpreted as being sharp. 
+
+**Other features:**
+*Lookahead using minimax
+  *alpha-beta pruning
+  *Transposition table
+  *iterative deepening
