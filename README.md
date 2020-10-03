@@ -22,7 +22,7 @@ This model can also be used to create metrics for more subjective chess position
 
 **Other features:**
 
-* Lookahead using minimax
-  * alpha-beta pruning
-  * Transposition table
-  * iterative deepening
+* Lookahead evaluation using minimax
+* alpha-beta pruning
+* Transposition table
+* Iterative deepening
