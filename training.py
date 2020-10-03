@@ -44,8 +44,8 @@ def get_full_model_allconv(regularizerl2, filters, residuals):
 if __name__ == "__main__":
 
     batchsize= 1024
-    training_gen = pg.DataGenerator(train_dir, 70312, batchsize, 3000, 1000, 3000)
-    val_gen = pg.DataGenerator(val_dir, 7812, batchsize, 3000, 1000, 3000)
+    training_gen = pg.DataGenerator(train_dir, 92284, batchsize, 3000, 1000, 3000)
+    val_gen = pg.DataGenerator(val_dir, 10253, batchsize, 3000, 1000, 3000)
 
     # regularizerl2 = L2(l2 = 1e-6)
     # model = get_full_model_allconv(regularizerl2, 108, 9)
@@ -54,7 +54,8 @@ if __name__ == "__main__":
 
     regAdam = tf.optimizers.Adam(learning_rate=.00008, beta_1=0.9, beta_2=0.999, epsilon=1e-7, amsgrad=False,
         name='Adam')
+    stoch = tf.optimizers.SGD(learning_rate= .00008)
     model.compile(optimizer = regAdam, loss='sparse_categorical_crossentropy', metrics=['sparse_categorical_accuracy'])
     history = model.fit(training_gen, validation_data = val_gen,
-                        validation_batch_size=batchsize, validation_steps= 7812,  epochs = 1, batch_size= batchsize, verbose=1, steps_per_epoch= 70312, use_multiprocessing= True, workers = 8)
+                        validation_batch_size=batchsize, validation_steps= 10253,  epochs = 1, batch_size= batchsize, verbose=1, steps_per_epoch= 92284, use_multiprocessing= True, workers = 8)
     model.save('newest_bigger_model2.h5')

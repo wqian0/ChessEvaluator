@@ -10,8 +10,24 @@ import chess.engine
 import processGames as pg
 from chess.engine import Cp
 import asyncio
+import time
 
 board_hashes= {}
+
+class BoardNode:
+    def __init__(self, board):
+        self.isWhite = board.turn == chess.WHITE
+        self.depth = 0
+        self.lower = -1
+        self.upper = 1
+        self.move = None
+        self.hash = hasher(board)
+    def __hash__(self):
+        return self.hash
+
+def hasher(board):
+    isWhite = board.turn == chess.WHITE
+    return chess.polyglot.zobrist_hash(board) * 10 + isWhite
 
 def convert_board_and_elo_combined(board, WhiteElo, BlackElo, min_elo, max_elo):
     board_out = np.zeros((20, 8, 8))
@@ -43,14 +59,35 @@ def convert_board_and_elo_combined(board, WhiteElo, BlackElo, min_elo, max_elo):
                 board_out[index][7 - row][col] = 1
     return board_out
 
-def get_best_move(model, board, WhiteElo, BlackElo, min_elo, max_elo, depth, isWhite):
-    bestScore = -100 if isWhite else 100
+def IterDeep(model, board, WhiteElo, BlackElo, min_elo, max_elo, max_depth, max_time):
+    start_time = time.time()
+    curr_time = time.time()
+    d = 1
+    move = None
+    while d <= max_depth and curr_time - start_time < max_time:
+        print("DEPTH", d)
+        move = get_best_move(model, board, WhiteElo, BlackElo, min_elo, max_elo, d)
+        d += 1
+        curr_time = time.time()
+    return move
+
+def predict(board, WhiteElo, BlackElo, min_elo, max_elo):
+    input = convert_board_and_elo_combined(board, WhiteElo, BlackElo, min_elo, max_elo)
+    return model.predict(np.array([input]))
+
+
+def eval(model, board, WhiteElo, BlackElo, min_elo, max_elo):
+    input = convert_board_and_elo_combined(board, WhiteElo, BlackElo, min_elo, max_elo)
+    prediction = np.array(model(np.array([input]))[0])
+    return prediction[0] - prediction[2]
+
+def get_best_move(model, board, WhiteElo, BlackElo, min_elo, max_elo, depth):
+    isWhite = (board.turn == chess.WHITE)
+    bestScore = -1 if isWhite else 1
     bestMove = None
-    print(board.legal_moves)
     for move in board.legal_moves:
         board.push(move)
-        currScore = lookahead(model, board, WhiteElo, BlackElo, min_elo, max_elo, depth - 1, -1, 1, not isWhite)
-        board_hashes[hash(board, not isWhite, depth)] = currScore
+        currScore = lookahead(model, board, WhiteElo, BlackElo, min_elo, max_elo, depth - 1, -1, 1)
         if isWhite and currScore > bestScore:
             bestScore = currScore
             bestMove = move
@@ -61,56 +98,71 @@ def get_best_move(model, board, WhiteElo, BlackElo, min_elo, max_elo, depth, isW
         print(bestScore, bestMove, currScore, move, len(board_hashes))
     return bestMove
 
-def predict(board, WhiteElo, BlackElo, min_elo, max_elo):
-    input = convert_board_and_elo_combined(board, WhiteElo, BlackElo, min_elo, max_elo)
-    return model.predict(np.array([input]))
-
-def hash(board, isWhite, depth):
-    return str(board) +str(isWhite) +str(depth)
-
-def eval(model, board, WhiteElo, BlackElo, min_elo, max_elo):
-    input = convert_board_and_elo_combined(board, WhiteElo, BlackElo, min_elo, max_elo)
-    prediction = np.array(model(np.array([input]))[0])
-    return prediction[0] - prediction[2]
-
-def lookahead(model, board, WhiteElo, BlackElo, min_elo, max_elo, depth, alpha, beta, isWhite):
-    currHash = hash(board, isWhite, depth)
+def lookahead(model, board, WhiteElo, BlackElo, min_elo, max_elo, depth, alpha, beta):
+    currHash = hasher(board)
     if currHash in board_hashes:
-        return board_hashes[currHash]
+        n = board_hashes[currHash]
+        if n.depth >= depth:
+            if n.lower >= beta:
+                return n.lower
+            if n.upper <= alpha:
+                return n.upper
+            alpha = max(alpha, n.lower)
+            beta = min(beta, n.upper)
     if depth == 0 or not board.legal_moves:
         if board.is_game_over():
             if board.result() == '1-0':
-                score = 1
+                g = 1
             if board.result() == '1/2-1/2':
-                score = 0
+                g = 0
             if board.result() == '0-1':
-                score = -1
+                g = -1
         else:
-            score = eval(model, board, WhiteElo, BlackElo, min_elo, max_elo)
-        board_hashes[currHash] = score
-        return score
-    bestScore  = -1 if isWhite else 1
-    for move in board.legal_moves:
-        board.push(move)
-        currScore = lookahead(model, board, WhiteElo, BlackElo, min_elo, max_elo, depth - 1, alpha, beta, not isWhite)
-        board_hashes[hash(board, isWhite, depth)] = currScore
-        if isWhite:
-            bestScore = max(bestScore, currScore)
-            alpha = max(bestScore, alpha)
-        else:
-            bestScore = min(bestScore, currScore)
-            beta = min(bestScore, beta)
-        board.pop()
-        if beta <= alpha:
-            return bestScore
-    return bestScore
+            g = eval(model, board, WhiteElo, BlackElo, min_elo, max_elo)
+    elif board.turn == chess.WHITE:
+        a, g = alpha, -1
+        for move in board.legal_moves:
+            if g >= beta:
+                break
+            board.push(move)
+            currScore = lookahead(model, board, WhiteElo, BlackElo, min_elo, max_elo, depth - 1, a, beta)
+            board.pop()
+            if currScore > g:
+                g = currScore
+                bestMove = move
+            a = max(a, g)
+    else:
+        b, g = beta, 1
+        for move in board.legal_moves:
+            if g <= alpha:
+                break
+            board.push(move)
+            currScore = lookahead(model, board, WhiteElo, BlackElo, min_elo, max_elo, depth - 1, alpha, b)
+            board.pop()
+            if currScore < g:
+                g = currScore
+                bestMove = move
+            b = min(b, g)
+    n = BoardNode(board)
+    board_hashes[currHash] = n
+    n.depth = depth
+    if g <= alpha:
+        n.upper = g
+    if g > alpha and g < beta:
+        n.upper = g
+        n.lower = g
+    if g >= beta:
+        n.lower = g
+    return g
 
 if __name__ == "__main__":
-    model = tf.keras.models.load_model('newest_bigger_model.h5')
-    board = chess.Board('rnbqkb1r/pppppppp/5n2/4P3/8/8/PPPP1PPP/RNBQKBNR b KQkq - 0 2')
-    print(predict(board, 2100, 2100, 1000, 3000))
-    print(get_best_move(model, board, 2200, 2200, 1000, 3000, 4, False))
-
+    model = tf.keras.models.load_model('newest_bigger_model2.h5')
+    board = chess.Board('rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1')
+    print(predict(board, 2200, 2200, 1000, 3000))
+    #print(get_best_move(model, board, 2200, 2200, 1000, 3000, 4))
+    timeStart = time.time()
+    print(IterDeep(model, board, 2200, 2200, 1000, 3000, 10, 20))
+    print(time.time() - timeStart)
 
 
 

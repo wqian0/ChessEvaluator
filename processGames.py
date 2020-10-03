@@ -25,7 +25,8 @@ def read_all_games(pgnList, positions_cap, base_prob):
         whiteElo = curr.headers['WhiteElo']
         blackElo = curr.headers['BlackElo']
         # filters out time-controls below 3-minute blitz with 2 s inc, and games with less than 2 moves
-        if len(moves) > 4 and plusIndex != -1 and int(curr.headers['TimeControl'][0:plusIndex]) >= 180 and int(curr.headers['TimeControl'][plusIndex + 1 :]) >= 2:
+        if len(moves) > 4 and plusIndex != -1 and int(curr.headers['TimeControl'][0:plusIndex]) >= 180 and \
+                int(curr.headers['TimeControl'][plusIndex + 1 :]) >= 2:
             print(gameNo, len(elos), result, whiteElo, blackElo, curr.headers['TimeControl'])
             currCount = 0
             for i in range(len(moves)):
@@ -40,7 +41,8 @@ def read_all_games(pgnList, positions_cap, base_prob):
         gameNo += 1
     return FENs, elos, results
 
-def writePositionsToFile(pgn_list, positions_cap, base_prob, train_frac, batch_size, train_dir, val_dir, train_start, val_start):
+def writePositionsToFile(pgn_list, positions_cap, base_prob, train_frac, batch_size,
+                         train_dir, val_dir, train_start, val_start):
     fens, elos, results = read_all_games(pgn_list, positions_cap, base_prob)
     fens = np.array(fens)
     elos = np.array(elos, dtype = int)
@@ -63,15 +65,21 @@ def writePositionsToFile(pgn_list, positions_cap, base_prob, train_frac, batch_s
 
     for i in range(training_num // batch_size):
         print(i)
-        np.save(open(train_dir + 'outcome_' + str(train_start + i) + ".npy", "wb"), np.array(results_train[i* batch_size: (i + 1) * batch_size]))
-        np.save(open(train_dir + 'elos_' + str(train_start + i) + ".npy", "wb"), np.array(elos_train[i * batch_size: (i + 1) * batch_size]))
-        np.save(open(train_dir + 'fens_'+str(train_start + i)+".npy", "wb"), fens_train[i* batch_size: (i + 1) * batch_size])
+        np.save(open(train_dir + 'outcome_' + str(train_start + i) + ".npy", "wb"),
+                np.array(results_train[i* batch_size: (i + 1) * batch_size]))
+        np.save(open(train_dir + 'elos_' + str(train_start + i) + ".npy", "wb"),
+                np.array(elos_train[i * batch_size: (i + 1) * batch_size]))
+        np.save(open(train_dir + 'fens_'+str(train_start + i)+".npy", "wb"),
+                fens_train[i* batch_size: (i + 1) * batch_size])
 
     for i in range(val_num // batch_size):
         print(i)
-        np.save(open(val_dir + 'outcome_' + str(val_start + i) + ".npy", "wb"), np.array(results_val[i* batch_size: (i + 1) * batch_size]))
-        np.save(open(val_dir + 'elos_' + str(val_start + i) + ".npy", "wb"), np.array(elos_val[i * batch_size: (i + 1) * batch_size]))
-        np.save(open(val_dir + 'fens_'+str(val_start + i)+".npy", "wb"), fens_val[i* batch_size: (i + 1) * batch_size])
+        np.save(open(val_dir + 'outcome_' + str(val_start + i) + ".npy", "wb"),
+                np.array(results_val[i* batch_size: (i + 1) * batch_size]))
+        np.save(open(val_dir + 'elos_' + str(val_start + i) + ".npy", "wb"),
+                np.array(elos_val[i * batch_size: (i + 1) * batch_size]))
+        np.save(open(val_dir + 'fens_'+str(val_start + i)+".npy", "wb"),
+                fens_val[i* batch_size: (i + 1) * batch_size])
 
 def convert_board_part(input):  # One hot encoding for first 12 channels
     output = np.zeros((20, 8, 8), dtype=np.float16)
@@ -144,6 +152,6 @@ class DataGenerator(tf.keras.utils.Sequence):
 if __name__ == "__main__":
     train_dir = "C:/Users/billy/PycharmProjects/ChessEvaluator/training_data/"
     val_dir = "C:/Users/billy/PycharmProjects/ChessEvaluator/val_data/"
-    pgns = open("lichess_db_standard_rated_2018-04.pgn")
-    writePositionsToFile(pgns, 25000000, .1, .9, 1024,train_dir, val_dir, 0, 0)
-    # CHANGE 0,0 LATER
+    pgns = open("lichess_db_standard_rated_2018-05.pgn")
+    writePositionsToFile(pgns, 40000000, .1, .9, 1024,  train_dir, val_dir, 92284, 10253)
+
