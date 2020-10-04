@@ -21,7 +21,7 @@ Indeed, the neural network predicts that, even if the white and black players we
 This model can also be used to create metrics for more subjective chess position features such as position sharpness/complexity. Positions that are evaluated to have around equal winning chances for white and black, but have abnormally low drawing chances, can be interpreted as being sharp. 
 
 **Other features:**
-* Lookahead evaluation using minimax
+* Lookahead evaluation using minimax search
 * alpha-beta pruning
 * Iterative deepening
 * Transposition table
