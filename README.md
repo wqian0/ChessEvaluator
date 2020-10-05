@@ -31,5 +31,4 @@ An engine built from the NN's evaluation function plays at around 1400-1600 stre
 **Future improvements for increasing search depth:**
 * Move ordering 
 * Null move pruning and quiescence search
-* Monte Carlo tree search 
 * Port to C++ 
