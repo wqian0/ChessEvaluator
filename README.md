@@ -24,7 +24,7 @@ This model can also be used to create metrics for more subjective chess position
 * Lookahead evaluation using minimax search
 * alpha-beta pruning
 * Iterative deepening
-* Transposition table
+* Transposition caching
 
 An engine built from the NN's evaluation function plays at around 1400-1600 strength at a depth of 2 ply. Its play style varies depending on the rating of its opponent, as well as its own assigned rating. Higher depth improves its general playing strength significantly, but dramatically increases calculation time; for most positions, a depth of 4 is the furthest it can go in a reasonable amount of time. Currently, its biggest weakness is understanding deep tactical lines due to lack of search depth. 
 
